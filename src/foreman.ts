@@ -121,14 +121,12 @@ export function nextState(
 
 export function parseArbiterVerdict(lastAssistantText: string): ArbiterVerdict {
   const upper = lastAssistantText.toUpperCase();
-  const hasPass = upper.includes("PASS");
-  const hasNeedsWork = upper.includes("NEEDS_WORK");
 
-  if (hasNeedsWork) {
+  if (upper.includes("NEEDS_WORK")) {
     return ArbiterVerdict.NeedsWork;
   }
 
-  if (hasPass) {
+  if (upper.includes("PASS")) {
     return ArbiterVerdict.Pass;
   }
 
