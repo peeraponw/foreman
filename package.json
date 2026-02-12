@@ -1,0 +1,27 @@
+{
+  "name": "foreman-opencode-plugin",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun --format esm && bun run node_modules/typescript/bin/tsc --emitDeclarationOnly",
+    "test": "bun test",
+    "typecheck": "bun run node_modules/typescript/bin/tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.19",
+    "@opencode-ai/sdk": "^1.1.19",
+    "zod": "^3.23"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.7"
+  }
+}
