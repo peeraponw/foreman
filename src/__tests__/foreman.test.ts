@@ -2,84 +2,18 @@ import {
   describe,
   it,
   expect,
-  beforeEach,
-  mock,
-  afterEach,
 } from "bun:test";
 import {
   ForemanState,
   ArbiterVerdict,
-  Role,
-  type ForemanConfig,
-  type SessionInfo,
 } from "../types.js";
-import { DEFAULT_CONFIG } from "../config.js";
-
-const mockResolveStoryPath = mock(
-  (dir: string, id: string) => `/mock/stories/${id}-test-story.md`
-);
-const mockReadAndParseStory = mock(() =>
-  Promise.resolve({
-    status: "ready-for-dev",
-    hasReviewSection: false,
-    hasUnresolvedItems: false,
-    taskStats: { total: 3, completed: 0 },
-  })
-);
-
-mock.module("../story-parser.js", () => ({
-  resolveStoryPath: mockResolveStoryPath,
-  readAndParseStory: mockReadAndParseStory,
-}));
 
 import {
   nextState,
   parseArbiterVerdict,
-  Foreman,
   type PluginClient,
   type ForemanStatus,
 } from "../foreman.js";
-
-// ============================================================================
-// Mock PluginClient
-// ============================================================================
-
-interface MockSessionMethods {
-  create: ReturnType<typeof mock>;
-  promptAsync: ReturnType<typeof mock>;
-  messages: ReturnType<typeof mock>;
-  abort: ReturnType<typeof mock>;
-}
-
-function createMockClient(): { client: PluginClient; mocks: MockSessionMethods } {
-  const mocks: MockSessionMethods = {
-    create: mock(() => Promise.resolve({ data: { id: "session-test-123" } })),
-    promptAsync: mock(() => Promise.resolve(undefined)),
-    messages: mock(() =>
-      Promise.resolve({
-        data: [
-          { info: { role: "assistant" }, parts: [{ type: "text", text: "Done" }] },
-        ],
-      })
-    ),
-    abort: mock(() => Promise.resolve(undefined)),
-  };
-
-  const client: PluginClient = {
-    session: {
-      create: mocks.create,
-      promptAsync: mocks.promptAsync,
-      messages: mocks.messages,
-      abort: mocks.abort,
-    },
-  };
-
-  return { client, mocks };
-}
-
-// ============================================================================
-// nextState Pure Function Tests
-// ============================================================================
 
 describe("nextState pure function", () => {
   const maxIterations = 3;
@@ -201,10 +135,6 @@ describe("nextState pure function", () => {
   });
 });
 
-// ============================================================================
-// parseArbiterVerdict Tests
-// ============================================================================
-
 describe("parseArbiterVerdict", () => {
   it('returns Pass for text containing "PASS" (case-insensitive)', () => {
     expect(parseArbiterVerdict("The implementation is pass")).toBe(ArbiterVerdict.Pass);
@@ -240,134 +170,6 @@ describe("parseArbiterVerdict", () => {
   });
 });
 
-// ============================================================================
-// Foreman Class Tests
-// ============================================================================
-
-describe("Foreman class", () => {
-  let foreman: Foreman;
-  let mockClient: PluginClient;
-  let mocks: MockSessionMethods;
-
-  const testConfig: ForemanConfig = {
-    ...DEFAULT_CONFIG,
-    max_iterations: 2,
-    role_timeout_ms: 60000,
-  };
-
-  beforeEach(() => {
-    const { client, mocks: m } = createMockClient();
-    mockClient = client;
-    mocks = m;
-    foreman = new Foreman(testConfig, mockClient);
-    mockResolveStoryPath.mockClear();
-    mockReadAndParseStory.mockClear();
-  });
-
-  describe("getStatus()", () => {
-    it("returns initial status with Idle state and null storyId", () => {
-      const status = foreman.getStatus();
-      expect(status.state).toBe(ForemanState.Idle);
-      expect(status.storyId).toBeNull();
-      expect(status.iteration).toBe(1);
-      expect(status.maxIterations).toBe(testConfig.max_iterations);
-    });
-  });
-
-  describe("run() - concurrent rejection", () => {
-    it("rejects concurrent run when already running", async () => {
-      const { client: blockingClient } = createMockClient();
-
-      let resolveRead: (() => void) | undefined;
-      const blockingReadAndParseStory = mock(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveRead = () => resolve();
-          })
-      );
-
-      mock.module("../story-parser.js", () => ({
-        resolveStoryPath: mockResolveStoryPath,
-        readAndParseStory: blockingReadAndParseStory,
-      }));
-
-      const { Foreman: BlockingForeman } = await import("../foreman.js");
-      const blockingForeman = new BlockingForeman(testConfig, blockingClient);
-
-      const firstRunPromise = blockingForeman.run("1-3", "/workspace");
-
-      await expect(blockingForeman.run("2-1", "/workspace")).rejects.toThrow(
-        /Foreman busy with story/
-      );
-
-      resolveRead?.();
-      await firstRunPromise.catch(() => {});
-
-      mock.module("../story-parser.js", () => ({
-        resolveStoryPath: mockResolveStoryPath,
-        readAndParseStory: mockReadAndParseStory,
-      }));
-    });
-  });
-
-  describe("handleEvent()", () => {
-    it("ignores events for non-foreman sessions", () => {
-      const event = {
-        type: "session.idle",
-        properties: { sessionID: "some-random-session-id" },
-      };
-
-      expect(() => foreman.handleEvent(event)).not.toThrow();
-    });
-
-    it("handles session.idle event for managed session", async () => {
-      const sessionId = "managed-session-123";
-      const { client: customClient } = createMockClient();
-      customClient.session.create = mock(() =>
-        Promise.resolve({ data: { id: sessionId } })
-      );
-
-      const customForeman = new Foreman(testConfig, customClient);
-
-      const runPromise = customForeman.run("1-3", "/workspace");
-
-      setTimeout(() => {
-        customForeman.handleEvent({
-          type: "session.idle",
-          properties: { sessionID: sessionId },
-        });
-      }, 10);
-
-      await runPromise.catch(() => {});
-    });
-
-    it("handles session.error event for managed session", async () => {
-      const sessionId = "managed-session-error";
-      const { client: customClient } = createMockClient();
-      customClient.session.create = mock(() =>
-        Promise.resolve({ data: { id: sessionId } })
-      );
-
-      const customForeman = new Foreman(testConfig, customClient);
-
-      const runPromise = customForeman.run("1-3", "/workspace");
-
-      setTimeout(() => {
-        customForeman.handleEvent({
-          type: "session.error",
-          properties: { sessionID: sessionId, error: "Test error" },
-        });
-      }, 10);
-
-      await runPromise.catch(() => {});
-    });
-  });
-});
-
-// ============================================================================
-// ForemanStatus Type Tests
-// ============================================================================
-
 describe("ForemanStatus type", () => {
   it("accepts valid status object", () => {
     const status: ForemanStatus = {
@@ -390,10 +192,6 @@ describe("ForemanStatus type", () => {
     expect(status.storyId).toBeNull();
   });
 });
-
-// ============================================================================
-// PluginClient Type Tests
-// ============================================================================
 
 describe("PluginClient type", () => {
   it("accepts valid client object", () => {

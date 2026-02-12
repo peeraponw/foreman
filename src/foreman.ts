@@ -182,7 +182,7 @@ export class Foreman {
       ) {
         switch (this.state) {
           case ForemanState.Idle:
-            await this.runDeveloperSession(false);
+            this.state = nextState(this.state, "startDeveloping");
             break;
 
           case ForemanState.Developing:
