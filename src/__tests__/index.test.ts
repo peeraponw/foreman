@@ -97,6 +97,10 @@ describe("plugin entry point", () => {
     (Foreman as unknown as ReturnType<typeof mock>).mockClear();
   });
 
+  afterEach(() => {
+    mock.restore();
+  });
+
   it("default export is a function (Plugin type)", () => {
     expect(plugin).toBeTypeOf("function");
   });
