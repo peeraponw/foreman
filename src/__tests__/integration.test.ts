@@ -2,15 +2,27 @@ import {
   describe,
   it,
   expect,
+  beforeAll,
   beforeEach,
   mock,
 } from "bun:test";
 import { ForemanState, type ForemanConfig } from "../types.js";
-import { DEFAULT_CONFIG } from "../config.js";
+import type { PluginClient, ForemanStatus } from "../foreman.js";
 
+// Type for Foreman instance - used before dynamic import
+type ForemanInstance = {
+  run: (storyId: string, directory: string) => Promise<string>;
+  getStatus: () => ForemanStatus;
+  handleEvent: (event: unknown) => void;
+};
+
+type ForemanConstructor = new (config: ForemanConfig, client: PluginClient) => ForemanInstance;
+
+// Mock functions - defined at module level but configured in beforeAll
 const mockResolveStoryPath = mock(
   (_dir: string, id: string) => `/mock/stories/${id}-story.md`
 );
+
 const mockReadAndParseStory = mock(() =>
   Promise.resolve({
     status: "in-progress",
@@ -20,12 +32,33 @@ const mockReadAndParseStory = mock(() =>
   })
 );
 
-mock.module("../story-parser.js", () => ({
-  resolveStoryPath: mockResolveStoryPath,
-  readAndParseStory: mockReadAndParseStory,
-}));
+// Foreman constructor - loaded once in beforeAll after mock setup
+let Foreman: ForemanConstructor;
 
-import { Foreman, type PluginClient } from "../foreman.js";
+const DEFAULT_CONFIG: ForemanConfig = {
+  stories_dir: "docs/stories",
+  sprint_status: "docs/sprint-status.yaml",
+  max_iterations: 3,
+  contexts: [],
+  roles: {
+    developer: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      agent: "sisyphus",
+    },
+    reviewer: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      agent: "sisyphus",
+    },
+    arbiter: {
+      provider: "anthropic",
+      model: "claude-opus-4-20250514",
+      agent: "sisyphus",
+    },
+  },
+  role_timeout_ms: 1800000,
+};
 
 interface PromptCapture {
   sessionId: string;
@@ -34,7 +67,7 @@ interface PromptCapture {
 }
 
 function buildClient(
-  foremanRef: { current: Foreman | null },
+  foremanRef: { current: ForemanInstance | null },
   verdictSequence: string[]
 ): {
   client: PluginClient;
@@ -127,6 +160,15 @@ function defaultStoryState() {
 }
 
 describe("Integration: full plugin lifecycle", () => {
+  beforeAll(async () => {
+    mock.module("../story-parser.js", () => ({
+      resolveStoryPath: mockResolveStoryPath,
+      readAndParseStory: mockReadAndParseStory,
+    }));
+    const module = await import("../foreman.js");
+    Foreman = module.Foreman;
+  });
+
   beforeEach(() => {
     mockResolveStoryPath.mockClear();
     mockReadAndParseStory.mockClear();
@@ -136,7 +178,7 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("Dev → Review → Arbitrate → PASS → Complete", async () => {
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client, createCalls, messagesCalls } =
       buildClient(ref, ["PASS"]);
 
@@ -151,7 +193,7 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("NEEDS_WORK then PASS: 2 full iterations", async () => {
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client, createCalls, messagesCalls } =
       buildClient(ref, ["NEEDS_WORK", "PASS"]);
 
@@ -172,7 +214,7 @@ describe("Integration: full plugin lifecycle", () => {
       role_timeout_ms: 30000,
     };
 
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client, createCalls, messagesCalls } =
       buildClient(ref, ["NEEDS_WORK", "NEEDS_WORK", "NEEDS_WORK"]);
 
@@ -215,7 +257,7 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("getStatus reflects state before and after run", async () => {
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client } = buildClient(ref, ["PASS"]);
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
@@ -233,7 +275,7 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("sends correct prompts to each role", async () => {
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client, capturedPrompts } = buildClient(ref, ["PASS"]);
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
@@ -260,7 +302,7 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("creates sessions with correct title format", async () => {
-    const ref: { current: Foreman | null } = { current: null };
+    const ref: { current: ForemanInstance | null } = { current: null };
     const { client, capturedTitles } = buildClient(ref, ["PASS"]);
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;

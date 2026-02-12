@@ -1,13 +1,41 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ForemanState } from "../types.js";
+import type { StoryState } from "../types.js";
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+mock.module("../story-parser.js", () => ({
+  resolveStoryPath(storiesDir: string, storyId: string): string {
+    const files = fs.readdirSync(storiesDir);
+    const pattern = new RegExp(`^${escapeRegex(storyId)}-.*\\.md$`);
+    const matches = files.filter((f: string) => pattern.test(f)).sort();
+    if (matches.length === 0) {
+      throw new Error(`No story file found for ID: ${storyId}`);
+    }
+    if (matches.length > 1) {
+      console.warn(
+        `Multiple story files found for ID ${storyId}: ${matches.join(", ")}. Using: ${matches[0]}`
+      );
+    }
+    return path.join(storiesDir, matches[0]);
+  },
+  async readAndParseStory(filePath: string): Promise<StoryState> {
+    const { parseStoryFile } = await import("../story-parser.js");
+    const content = await fs.promises.readFile(filePath, "utf-8");
+    return parseStoryFile(content);
+  },
+}));
+
 import {
   parseStoryFile,
   deriveState,
   resolveStoryPath,
   readAndParseStory,
 } from "../story-parser.js";
-import { ForemanState } from "../types.js";
 
 const PROJECT_ROOT = path.join(import.meta.dir, "../..");
 const EXAMPLES_DIR = path.join(PROJECT_ROOT, "docs/examples");
