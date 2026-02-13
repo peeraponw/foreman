@@ -25,6 +25,20 @@ describe("buildDeveloperPrompt", () => {
 
     expect(prompt).not.toContain("action items");
   });
+
+  it("instructs never to stop and wait for user input", () => {
+    const prompt = buildDeveloperPrompt("/stories/s.md", false);
+
+    expect(prompt).toContain(
+      "NEVER stop and wait for user input"
+    );
+  });
+
+  it("contains instructions for numbered options", () => {
+    const prompt = buildDeveloperPrompt("/stories/s.md", false);
+
+    expect(prompt).toContain("numbered option");
+  });
 });
 
 describe("buildReviewerPrompt", () => {
@@ -42,6 +56,20 @@ describe("buildReviewerPrompt", () => {
 
     expect(prompt).toContain("2");
     expect(prompt).toContain("action items");
+  });
+
+  it("instructs never to stop and wait for user input", () => {
+    const prompt = buildReviewerPrompt("/stories/s.md");
+
+    expect(prompt).toContain(
+      "NEVER stop and wait for user input"
+    );
+  });
+
+  it("contains instructions for numbered list", () => {
+    const prompt = buildReviewerPrompt("/stories/s.md");
+
+    expect(prompt).toContain("numbered list");
   });
 });
 

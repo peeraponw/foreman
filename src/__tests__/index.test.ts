@@ -1,5 +1,10 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
-import type { Plugin, PluginInput, Hooks, ToolContext } from "@opencode-ai/plugin";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import type {
+  Plugin,
+  PluginInput,
+  Hooks,
+  ToolContext,
+} from "@opencode-ai/plugin";
 import { z } from "zod";
 import type { ForemanConfig } from "../types.js";
 import type { PluginClient, ForemanStatus } from "../foreman.js";
@@ -7,26 +12,31 @@ import type { PluginClient, ForemanStatus } from "../foreman.js";
 type MockForeman = {
   run: ReturnType<typeof mock>;
   getStatus: ReturnType<typeof mock>;
-  handleEvent: ReturnType<typeof mock>;
+  isManagedSession: ReturnType<typeof mock>;
 };
 
 let mockConfig: ForemanConfig;
 let mockForemanInstance: MockForeman;
 
-const mockLoadConfig = mock((_directory?: string) => mockConfig);
+const mockLoadConfig = mock(
+  (_directory?: string) => mockConfig
+);
 const mockForemanConstructor = mock(
-  (_config: ForemanConfig, _client: PluginClient) => mockForemanInstance
+  (_config: ForemanConfig, _client: PluginClient) =>
+    mockForemanInstance
 );
 
 const mockTool = Object.assign(
-  mock((input: {
-    description: string;
-    args: Record<string, unknown>;
-    execute: (
-      args: Record<string, unknown>,
-      context: ToolContext
-    ) => Promise<string>;
-  }) => input),
+  mock(
+    (input: {
+      description: string;
+      args: Record<string, unknown>;
+      execute: (
+        args: Record<string, unknown>,
+        context: ToolContext
+      ) => Promise<string>;
+    }) => input
+  ),
   { schema: z }
 );
 
@@ -56,13 +66,20 @@ describe("plugin entry point", () => {
         promptAsync: mock(),
         messages: mock(),
         abort: mock(),
+        status: mock(),
+      },
+      tui: {
+        showToast: mock(),
       },
     } as unknown as PluginInput["client"],
     project: {
       id: "test-project",
       name: "Test Project",
       worktree: "/test/project",
-      time: { created: Date.now(), updated: Date.now() },
+      time: {
+        created: Date.now(),
+        updated: Date.now(),
+      },
     } as PluginInput["project"],
     directory: "/test/project",
     worktree: "/test/project",
@@ -104,9 +121,12 @@ describe("plugin entry point", () => {
             storyId: null,
             iteration: 1,
             maxIterations: 3,
+            currentRole: null,
+            sessionDurationMs: null,
+            taskStats: null,
           }) as ForemanStatus
       ),
-      handleEvent: mock(),
+      isManagedSession: mock(() => false),
     };
 
     mockLoadConfig.mockClear();
@@ -117,14 +137,22 @@ describe("plugin entry point", () => {
     expect(plugin).toBeTypeOf("function");
   });
 
-  it("returns Hooks with tool and event properties", async () => {
+  it("returns Hooks with tool and permission.ask", async () => {
     const input = createMockInput();
     const hooks = await plugin(input);
 
     expect(hooks).toHaveProperty("tool");
-    expect(hooks).toHaveProperty("event");
     expect(hooks.tool).toBeTypeOf("object");
-    expect(hooks.event).toBeTypeOf("function");
+    const hooksRecord = hooks as Record<string, unknown>;
+    expect(hooksRecord["permission.ask"]).toBeTypeOf("function");
+  });
+
+  it("does not return event hook", async () => {
+    const input = createMockInput();
+    const hooks = await plugin(input);
+    const hooksRecord = hooks as Record<string, unknown>;
+
+    expect(hooksRecord["event"]).toBeUndefined();
   });
 
   it("tool has foreman_run key", async () => {
@@ -154,27 +182,105 @@ describe("plugin entry point", () => {
     expect(foremanRunTool?.args).toHaveProperty("story_id");
   });
 
-  it("event handler is a function", async () => {
+  it("permission.ask hook is a function", async () => {
     const input = createMockInput();
     const hooks = await plugin(input);
-    expect(hooks.event).toBeTypeOf("function");
+    const hooksRecord = hooks as Record<string, unknown>;
+
+    const permHook = hooksRecord["permission.ask"] as (
+      input: Record<string, unknown>,
+      output: Record<string, unknown>
+    ) => Promise<void>;
+    expect(permHook).toBeTypeOf("function");
   });
 
-  it("event handler calls foreman.handleEvent", async () => {
+  it("permission.ask auto-allows managed sessions", async () => {
+    mockForemanInstance.isManagedSession.mockImplementation(
+      () => true
+    );
+
     const input = createMockInput();
     const hooks = await plugin(input);
+    const hooksRecord = hooks as Record<string, unknown>;
 
-    const testEvent = { type: "test", properties: {} };
-    await hooks.event?.({
-      event: testEvent as unknown as Parameters<
-        NonNullable<Hooks["event"]>
-      >[0]["event"],
-    });
+    const permHook = hooksRecord["permission.ask"] as (
+      input: { sessionID?: string; type?: string },
+      output: { status?: string }
+    ) => Promise<void>;
 
-    expect(mockForemanInstance.handleEvent).toHaveBeenCalledTimes(1);
-    expect(mockForemanInstance.handleEvent).toHaveBeenCalledWith(
-      testEvent
+    const hookInput = {
+      sessionID: "test-session",
+      type: "file.write",
+    };
+    const hookOutput: { status?: string } = {};
+
+    await permHook(hookInput, hookOutput);
+
+    expect(hookOutput.status).toBe("allow");
+  });
+
+  it(
+    "permission.ask does not modify output for unmanaged sessions",
+    async () => {
+      mockForemanInstance.isManagedSession.mockImplementation(
+        () => false
+      );
+
+      const input = createMockInput();
+      const hooks = await plugin(input);
+      const hooksRecord = hooks as Record<string, unknown>;
+
+      const permHook = hooksRecord["permission.ask"] as (
+        input: { sessionID?: string; type?: string },
+        output: { status?: string }
+      ) => Promise<void>;
+
+      const hookInput = {
+        sessionID: "unknown-session",
+        type: "file.write",
+      };
+      const hookOutput: { status?: string } = {};
+
+      await permHook(hookInput, hookOutput);
+
+      expect(hookOutput.status).toBeUndefined();
+    }
+  );
+
+  it("foreman_status returns enriched pipe-separated format", async () => {
+    mockForemanInstance.getStatus.mockImplementation(
+      () =>
+        ({
+          state: "Developing",
+          storyId: "1-3",
+          iteration: 2,
+          maxIterations: 3,
+          currentRole: "Developer",
+          sessionDurationMs: 5000,
+          taskStats: { total: 5, completed: 2 },
+        }) as ForemanStatus
     );
+
+    const input = createMockInput();
+    const hooks = (await plugin(input)) as Required<Hooks>;
+
+    const statusTool = hooks.tool?.foreman_status;
+    const mockContext = {
+      metadata: mock(() => undefined),
+    } as unknown as ToolContext;
+
+    const result = await statusTool?.execute(
+      {} as Record<string, never>,
+      mockContext
+    );
+
+    expect(result).toContain("State: Developing");
+    expect(result).toContain("Story: 1-3");
+    expect(result).toContain("Iteration: 2/3");
+    expect(result).toContain("Role: Developer");
+    expect(result).toContain("Duration:");
+    expect(result).toContain("Tasks: 2/5");
+    expect(result).toContain("|");
   });
 
   it("loads config with correct directory", async () => {
@@ -186,6 +292,13 @@ describe("plugin entry point", () => {
   it("creates Foreman with config and client", async () => {
     const input = createMockInput();
     await plugin(input);
-    expect(Foreman).toHaveBeenCalledWith(mockConfig, input.client);
+    expect(Foreman).toHaveBeenCalledWith(
+      mockConfig,
+      input.client
+    );
+  });
+
+  afterAll(() => {
+    mock.restore();
   });
 });

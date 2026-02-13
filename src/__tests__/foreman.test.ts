@@ -171,38 +171,56 @@ describe("parseArbiterVerdict", () => {
 });
 
 describe("ForemanStatus type", () => {
-  it("accepts valid status object", () => {
+  it("accepts valid status object with all fields", () => {
     const status: ForemanStatus = {
       state: ForemanState.Developing,
       storyId: "1-3",
       iteration: 2,
       maxIterations: 3,
+      currentRole: "Developer",
+      sessionDurationMs: 5000,
+      taskStats: { total: 5, completed: 2 },
     };
     expect(status.state).toBe(ForemanState.Developing);
     expect(status.storyId).toBe("1-3");
+    expect(status.currentRole).toBe("Developer");
+    expect(status.sessionDurationMs).toBe(5000);
+    expect(status.taskStats).toEqual({ total: 5, completed: 2 });
   });
 
-  it("allows null storyId", () => {
+  it("allows null fields for idle state", () => {
     const status: ForemanStatus = {
       state: ForemanState.Idle,
       storyId: null,
       iteration: 1,
       maxIterations: 3,
+      currentRole: null,
+      sessionDurationMs: null,
+      taskStats: null,
     };
     expect(status.storyId).toBeNull();
+    expect(status.currentRole).toBeNull();
+    expect(status.sessionDurationMs).toBeNull();
+    expect(status.taskStats).toBeNull();
   });
 });
 
 describe("PluginClient type", () => {
-  it("accepts valid client object", () => {
+  it("accepts valid client object with status and tui", () => {
     const client: PluginClient = {
       session: {
         create: async () => ({ data: { id: "test" } }),
         promptAsync: async () => undefined,
         messages: async () => ({ data: [] }),
         abort: async () => undefined,
+        status: async () => ({ data: {} }),
+      },
+      tui: {
+        showToast: async () => undefined,
       },
     };
     expect(client.session).toBeDefined();
+    expect(client.session.status).toBeDefined();
+    expect(client.tui).toBeDefined();
   });
 });
