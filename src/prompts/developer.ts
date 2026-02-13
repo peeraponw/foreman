@@ -7,9 +7,12 @@
 export function buildDeveloperPrompt(storyPath: string, isFollowUp: boolean): string {
   const basePrompt = `Run /bmad:bmm:dev-story ${storyPath}
 
-The workflow will ask interactive questions.
-- Answer "y" to confirmations.
-Do not wait for user input.`;
+The workflow will ask interactive questions. Answer them immediately without pausing:
+- For any yes/no or confirmation prompt: answer "y"
+- For any numbered option list: answer with the number for the most appropriate action
+- For any path-related question: the story path is ${storyPath}
+- NEVER stop and wait for user input — always provide an answer immediately
+Do not output questions directed at the user. Answer them yourself inline.`;
 
   if (isFollowUp) {
     return `${basePrompt}

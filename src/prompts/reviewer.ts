@@ -7,9 +7,11 @@
 export function buildReviewerPrompt(storyPath: string): string {
   return `Run /bmad:bmm:code-review ${storyPath}
 
-The workflow will ask interactive questions.
+The workflow will ask interactive questions. Answer them immediately without pausing:
 - First confirmation: answer "y"
 - Second confirmation: answer "y"
-- When asked to select action: answer "2" (create action items)
-Do not wait for user input.`;
+- When asked to select an action (numbered list): answer "2" (create action items)
+- For any other yes/no prompt: answer "y"
+- NEVER stop and wait for user input — always provide an answer immediately
+Do not output questions directed at the user. Answer them yourself inline.`;
 }
