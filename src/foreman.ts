@@ -30,6 +30,26 @@ export interface PluginClient {
       }>;
     }>;
     abort: (opts: { path: { id: string } }) => Promise<unknown>;
+    status: (opts?: {
+      query?: { directory?: string };
+    }) => Promise<{
+      data?: {
+        [key: string]:
+          | { type: "idle" }
+          | { type: "busy" }
+          | { type: "retry"; attempt: number; message: string; next: number };
+      };
+    }>;
+  };
+  tui: {
+    showToast: (opts: {
+      body: {
+        message: string;
+        variant: "info" | "success" | "warning" | "error";
+        title?: string;
+        duration?: number;
+      };
+    }) => Promise<unknown>;
   };
 }
 
@@ -46,12 +66,6 @@ type ForemanEvent =
   | "reviewComplete"
   | "verdict"
   | "error";
-
-interface SessionWaiter {
-  resolve: () => void;
-  reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
-}
 
 export function nextState(
   current: ForemanState,
@@ -141,7 +155,6 @@ export class Foreman {
   private iteration: number = 1;
   private isRunning: boolean = false;
   private managedSessions: Map<string, SessionInfo> = new Map();
-  private sessionWaiters: Map<string, SessionWaiter> = new Map();
   private storyPath: string | null = null;
 
   constructor(config: ForemanConfig, client: PluginClient) {
@@ -205,52 +218,6 @@ export class Foreman {
     } finally {
       this.cleanup();
     }
-  }
-
-  handleEvent(event: unknown): void {
-    if (!this.isObject(event)) {
-      return;
-    }
-
-    const evt = event as Record<string, unknown>;
-    const eventType = evt.type;
-    const properties = evt.properties;
-
-    if (!this.isObject(properties)) {
-      return;
-    }
-
-    const props = properties as Record<string, unknown>;
-    const sessionID = props.sessionID;
-
-    if (typeof sessionID !== "string") {
-      return;
-    }
-
-    if (!this.managedSessions.has(sessionID)) {
-      return;
-    }
-
-    const waiter = this.sessionWaiters.get(sessionID);
-    if (!waiter) {
-      return;
-    }
-
-    if (eventType === "session.idle") {
-      clearTimeout(waiter.timeoutId);
-      this.sessionWaiters.delete(sessionID);
-      waiter.resolve();
-    } else if (eventType === "session.error") {
-      clearTimeout(waiter.timeoutId);
-      this.sessionWaiters.delete(sessionID);
-      const errorMsg =
-        typeof props.error === "string" ? props.error : "Session error";
-      waiter.reject(new Error(errorMsg));
-    }
-  }
-
-  private isObject(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
   }
 
   private determineInitialState(status: string): ForemanState {
@@ -381,19 +348,34 @@ export class Foreman {
   }
 
   private async waitForSession(sessionId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(async () => {
-        this.sessionWaiters.delete(sessionId);
-        await this.client.session.abort({ path: { id: sessionId } });
-        reject(new Error(`Session ${sessionId} timed out`));
-      }, this.config.role_timeout_ms);
+    const pollIntervalMs = 2000;
+    const startTime = Date.now();
 
-      this.sessionWaiters.set(sessionId, {
-        resolve: () => resolve(),
-        reject,
-        timeoutId,
-      });
-    });
+    while (Date.now() - startTime < this.config.role_timeout_ms) {
+      await this.sleep(pollIntervalMs);
+      const statusResponse = await this.client.session.status();
+      const sessionStatus = statusResponse.data?.[sessionId];
+
+      if (!sessionStatus || sessionStatus.type === "idle") {
+        return; // Session completed
+      }
+
+      if (sessionStatus.type === "retry") {
+        continue; // Session is retrying — continue polling
+      }
+
+      // sessionStatus.type === "busy" — still running
+    }
+
+    // Timeout reached
+    await this.client.session.abort({ path: { id: sessionId } });
+    throw new Error(
+      `Session ${sessionId} timed out after ${this.config.role_timeout_ms}ms`
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   private async getLastAssistantMessage(sessionId: string): Promise<string> {
@@ -419,10 +401,6 @@ export class Foreman {
   }
 
   private cleanup(): void {
-    for (const waiter of this.sessionWaiters.values()) {
-      clearTimeout(waiter.timeoutId);
-    }
-    this.sessionWaiters.clear();
     this.managedSessions.clear();
     this.isRunning = false;
     this.storyPath = null;

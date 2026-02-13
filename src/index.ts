@@ -27,9 +27,6 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
         },
       }),
     },
-    event: async ({ event }) => {
-      foreman.handleEvent(event);
-    },
   };
 };
 
