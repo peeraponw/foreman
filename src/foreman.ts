@@ -158,7 +158,7 @@ export class Foreman {
     };
   }
 
-  async run(storyId: string, directory: string): Promise<string> {
+  async run(storyId: string): Promise<string> {
     if (this.isRunning) {
       throw new Error(`Foreman busy with story ${this.currentStoryId}`);
     }
@@ -169,7 +169,7 @@ export class Foreman {
 
     try {
       this.storyPath = resolveStoryPath(
-        `${directory}/${this.config.stories_dir}`,
+        this.config.stories_dir,
         storyId
       );
 
@@ -354,18 +354,26 @@ export class Foreman {
     return sessionId;
   }
 
+  private parseModel(model: string): { providerID: string; modelID: string } {
+    const slashIndex = model.indexOf("/");
+    if (slashIndex === -1) {
+      throw new Error(`Invalid model format "${model}": expected "provider/model"`);
+    }
+    return {
+      providerID: model.slice(0, slashIndex),
+      modelID: model.slice(slashIndex + 1),
+    };
+  }
+
   private async sendPrompt(
     sessionId: string,
     promptText: string,
-    roleConfig: { provider: string; model: string; agent: string }
+    roleConfig: { model: string; agent: string }
   ): Promise<void> {
     await this.client.session.promptAsync({
       path: { id: sessionId },
       body: {
-        model: {
-          providerID: roleConfig.provider,
-          modelID: roleConfig.model,
-        },
+        model: this.parseModel(roleConfig.model),
         agent: roleConfig.agent,
         parts: [{ type: "text", text: promptText }],
       },

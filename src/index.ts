@@ -15,7 +15,7 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
           story_id: tool.schema.string().describe("Story ID (e.g., '1-3')"),
         },
         async execute(args, _context: ToolContext) {
-          return await foreman.run(args.story_id, input.directory);
+          return await foreman.run(args.story_id);
         },
       }),
       foreman_status: tool({
