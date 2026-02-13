@@ -58,7 +58,15 @@ export interface ForemanStatus {
   storyId: string | null;
   iteration: number;
   maxIterations: number;
+  currentRole: string | null;
+  sessionDurationMs: number | null;
+  taskStats: { total: number; completed: number } | null;
 }
+
+export type ProgressCallback = (update: {
+  title: string;
+  metadata: Record<string, unknown>;
+}) => void;
 
 type ForemanEvent =
   | "startDeveloping"
@@ -156,6 +164,7 @@ export class Foreman {
   private isRunning: boolean = false;
   private managedSessions: Map<string, SessionInfo> = new Map();
   private storyPath: string | null = null;
+  private taskStats: { total: number; completed: number } | null = null;
 
   constructor(config: ForemanConfig, client: PluginClient) {
     this.config = config;
@@ -163,15 +172,30 @@ export class Foreman {
   }
 
   getStatus(): ForemanStatus {
+    let currentRole: string | null = null;
+    let sessionDurationMs: number | null = null;
+
+    for (const session of this.managedSessions.values()) {
+      currentRole = session.role;
+      sessionDurationMs = Date.now() - session.startedAt.getTime();
+    }
+
     return {
       state: this.state,
       storyId: this.currentStoryId,
       iteration: this.iteration,
       maxIterations: this.config.max_iterations,
+      currentRole,
+      sessionDurationMs,
+      taskStats: this.taskStats,
     };
   }
 
-  async run(storyId: string): Promise<string> {
+  isManagedSession(sessionId: string): boolean {
+    return this.managedSessions.has(sessionId);
+  }
+
+  async run(storyId: string, onProgress?: ProgressCallback): Promise<string> {
     if (this.isRunning) {
       throw new Error(`Foreman busy with story ${this.currentStoryId}`);
     }
@@ -187,6 +211,7 @@ export class Foreman {
       );
 
       const storyState = await readAndParseStory(this.storyPath);
+      this.taskStats = storyState.taskStats;
       this.state = this.determineInitialState(storyState.status);
 
       while (
@@ -199,17 +224,41 @@ export class Foreman {
             break;
 
           case ForemanState.Developing:
+            onProgress?.({
+              title: `Developing (iter ${this.iteration}/${this.config.max_iterations})`,
+              metadata: { state: "Developing", iteration: this.iteration, maxIterations: this.config.max_iterations, role: "Developer" },
+            });
             await this.runDeveloperSession(this.iteration > 1);
             break;
 
           case ForemanState.Reviewing:
+            onProgress?.({
+              title: `Reviewing (iter ${this.iteration}/${this.config.max_iterations})`,
+              metadata: { state: "Reviewing", iteration: this.iteration, maxIterations: this.config.max_iterations, role: "Reviewer" },
+            });
             await this.runReviewerSession();
             break;
 
           case ForemanState.Arbitrating:
+            onProgress?.({
+              title: `Arbitrating (iter ${this.iteration}/${this.config.max_iterations})`,
+              metadata: { state: "Arbitrating", iteration: this.iteration, maxIterations: this.config.max_iterations, role: "Arbiter" },
+            });
             await this.runArbiterSession();
             break;
         }
+      }
+
+      if (this.state === ForemanState.Complete) {
+        onProgress?.({
+          title: `Complete — Story ${storyId}`,
+          metadata: { state: "Complete", iteration: this.iteration, storyId },
+        });
+      } else {
+        onProgress?.({
+          title: `Failed — Story ${storyId}`,
+          metadata: { state: "Failed", iteration: this.iteration, storyId },
+        });
       }
 
       return this.state === ForemanState.Complete
@@ -349,6 +398,8 @@ export class Foreman {
 
   private async waitForSession(sessionId: string): Promise<void> {
     const pollIntervalMs = 2000;
+    const maxAutoAnswers = 10;
+    let autoAnswerCount = 0;
     const startTime = Date.now();
 
     while (Date.now() - startTime < this.config.role_timeout_ms) {
@@ -357,21 +408,76 @@ export class Foreman {
       const sessionStatus = statusResponse.data?.[sessionId];
 
       if (!sessionStatus || sessionStatus.type === "idle") {
-        return; // Session completed
+        const wasQuestion = await this.detectAndAutoAnswer(sessionId);
+        if (wasQuestion) {
+          autoAnswerCount++;
+          if (autoAnswerCount > maxAutoAnswers) {
+            throw new Error(
+              `Too many auto-answers (${maxAutoAnswers}) for session ${sessionId}`
+            );
+          }
+          continue;
+        }
+        return;
       }
 
       if (sessionStatus.type === "retry") {
-        continue; // Session is retrying — continue polling
+        continue;
       }
 
       // sessionStatus.type === "busy" — still running
     }
 
-    // Timeout reached
     await this.client.session.abort({ path: { id: sessionId } });
     throw new Error(
       `Session ${sessionId} timed out after ${this.config.role_timeout_ms}ms`
     );
+  }
+
+  private async detectAndAutoAnswer(
+    sessionId: string
+  ): Promise<boolean> {
+    const lastMessage = await this.getLastAssistantMessage(sessionId);
+    if (!lastMessage) {
+      return false;
+    }
+
+    // Check for numbered options (e.g., "1)", "2)", "3)")
+    const numberedPattern = /(\d+)[).]\s+\S/g;
+    const matches = [...lastMessage.matchAll(numberedPattern)];
+    if (matches.length >= 2) {
+      const lastNumber = matches[matches.length - 1][1];
+      console.warn(
+        `[foreman] Auto-answering <ask>: "${lastMessage.slice(0, 80)}..." → "${lastNumber}"`
+      );
+      await this.sendAutoAnswer(sessionId, lastNumber);
+      return true;
+    }
+
+    // Check for yes/no confirmation patterns
+    const confirmPattern =
+      /\?\s*(?:\(y\/n\))?[\s]*$|proceed\?|confirm\?|continue\?|ready\?|correct\?/i;
+    if (confirmPattern.test(lastMessage)) {
+      console.warn(
+        `[foreman] Auto-answering <ask>: "${lastMessage.slice(0, 80)}..." → "y"`
+      );
+      await this.sendAutoAnswer(sessionId, "y");
+      return true;
+    }
+
+    return false;
+  }
+
+  private async sendAutoAnswer(
+    sessionId: string,
+    answer: string
+  ): Promise<void> {
+    await this.client.session.promptAsync({
+      path: { id: sessionId },
+      body: {
+        parts: [{ type: "text", text: answer }],
+      },
+    });
   }
 
   private sleep(ms: number): Promise<void> {
@@ -404,5 +510,6 @@ export class Foreman {
     this.managedSessions.clear();
     this.isRunning = false;
     this.storyPath = null;
+    this.taskStats = null;
   }
 }
