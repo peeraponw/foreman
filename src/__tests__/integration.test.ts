@@ -2,13 +2,22 @@ import {
   describe,
   it,
   expect,
+  beforeAll,
   beforeEach,
-  afterEach,
   mock,
 } from "bun:test";
 import { ForemanState, type ForemanConfig } from "../types.js";
 import type { PluginClient, ForemanStatus } from "../foreman.js";
 
+type ForemanInstance = {
+  run: (storyId: string) => Promise<string>;
+  getStatus: () => ForemanStatus;
+  handleEvent: (event: unknown) => void;
+};
+
+type ForemanConstructor = new (config: ForemanConfig, client: PluginClient) => ForemanInstance;
+
+// Mock functions - defined at module level but configured in beforeAll
 const mockResolveStoryPath = mock(
   (_dir: string, id: string) => `/mock/stories/${id}-story.md`
 );
@@ -22,12 +31,8 @@ const mockReadAndParseStory = mock(() =>
   })
 );
 
-mock.module("../story-parser.js", () => ({
-  resolveStoryPath: mockResolveStoryPath,
-  readAndParseStory: mockReadAndParseStory,
-}));
-
-import { Foreman } from "../foreman.js";
+// Foreman constructor - loaded once in beforeAll after mock setup
+let Foreman: ForemanConstructor;
 
 const DEFAULT_CONFIG: ForemanConfig = {
   stories_dir: "docs/stories",
@@ -36,18 +41,15 @@ const DEFAULT_CONFIG: ForemanConfig = {
   contexts: [],
   roles: {
     developer: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "anthropic/claude-sonnet-4-20250514",
       agent: "sisyphus",
     },
     reviewer: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "anthropic/claude-sonnet-4-20250514",
       agent: "sisyphus",
     },
     arbiter: {
-      provider: "anthropic",
-      model: "claude-opus-4-20250514",
+      model: "anthropic/claude-opus-4-20250514",
       agent: "sisyphus",
     },
   },
@@ -59,8 +61,6 @@ interface PromptCapture {
   text: string;
   agent: string;
 }
-
-type ForemanInstance = InstanceType<typeof Foreman>;
 
 function buildClient(
   foremanRef: { current: ForemanInstance | null },
@@ -84,7 +84,7 @@ function buildClient(
         capturedTitles.push(opts.body.title);
       }
       return Promise.resolve({
-        data: { id: "s-" + sessionCounter },
+        data: { id: `s-${sessionCounter}` },
       });
     }
   );
@@ -146,21 +146,34 @@ const testConfig: ForemanConfig = {
   role_timeout_ms: 30000,
 };
 
+function defaultStoryState() {
+  return {
+    status: "in-progress",
+    hasReviewSection: false,
+    hasUnresolvedItems: false,
+    taskStats: { total: 5, completed: 0 },
+  };
+}
+
 describe("Integration: full plugin lifecycle", () => {
+  beforeAll(async () => {
+    mock.module("../story-parser.js", () => ({
+      resolveStoryPath: mockResolveStoryPath,
+      readAndParseStory: mockReadAndParseStory,
+    }));
+    const module = await import("../foreman.js");
+    Foreman = module.Foreman;
+  });
+
   beforeEach(() => {
     mockResolveStoryPath.mockClear();
     mockReadAndParseStory.mockClear();
     mockReadAndParseStory.mockImplementation(() =>
-      Promise.resolve({
-        status: "in-progress",
-        hasReviewSection: false,
-        hasUnresolvedItems: false,
-        taskStats: { total: 5, completed: 0 },
-      })
+      Promise.resolve(defaultStoryState())
     );
   });
 
-  it("Dev -> Review -> Arbitrate -> PASS -> Complete", async () => {
+  it("Dev → Review → Arbitrate → PASS → Complete", async () => {
     const ref: { current: ForemanInstance | null } = { current: null };
     const { client, createCalls, messagesCalls } =
       buildClient(ref, ["PASS"]);
@@ -168,7 +181,7 @@ describe("Integration: full plugin lifecycle", () => {
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
 
-    const result = await foreman.run("1-3", "/workspace");
+    const result = await foreman.run("1-3");
 
     expect(result).toBe("Story 1-3 completed successfully");
     expect(createCalls).toHaveBeenCalledTimes(3);
@@ -183,7 +196,7 @@ describe("Integration: full plugin lifecycle", () => {
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
 
-    const result = await foreman.run("2-1", "/workspace");
+    const result = await foreman.run("2-1");
 
     expect(result).toBe("Story 2-1 completed successfully");
     expect(createCalls).toHaveBeenCalledTimes(6);
@@ -204,7 +217,7 @@ describe("Integration: full plugin lifecycle", () => {
     const foreman = new Foreman(config, client);
     ref.current = foreman;
 
-    const result = await foreman.run("3-1", "/workspace");
+    const result = await foreman.run("3-1");
 
     expect(result).toBe("Story 3-1 completed successfully");
     expect(createCalls).toHaveBeenCalledTimes(6);
@@ -212,34 +225,31 @@ describe("Integration: full plugin lifecycle", () => {
   });
 
   it("rejects concurrent run while first is active", async () => {
-    let resolveRead: (() => void) | undefined;
+    let rejectStory: ((err: Error) => void) | undefined;
     mockReadAndParseStory.mockImplementation(
       () =>
-        new Promise((resolve) => {
-          resolveRead = () => resolve({
-            status: "in-progress",
-            hasReviewSection: false,
-            hasUnresolvedItems: false,
-            taskStats: { total: 5, completed: 0 },
-          });
+        new Promise((_resolve, reject) => {
+          rejectStory = reject;
         })
     );
 
-    const ref: { current: ForemanInstance | null } = { current: null };
-    const { client } = buildClient(ref, ["PASS"]);
-    const foreman = new Foreman(testConfig, client);
-    ref.current = foreman;
+    const foreman = new Foreman(testConfig, {
+      session: {
+        create: async () => ({ data: { id: "block-1" } }),
+        promptAsync: async () => undefined,
+        messages: async () => ({ data: [] }),
+        abort: async () => undefined,
+      },
+    });
 
-    const firstRunPromise = foreman.run("1-3", "/workspace");
-    
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const firstRun = foreman.run("1-3");
 
-    await expect(foreman.run("2-1", "/workspace")).rejects.toThrow(
+    await expect(foreman.run("2-1")).rejects.toThrow(
       "Foreman busy with story 1-3"
     );
 
-    resolveRead?.();
-    await firstRunPromise;
+    rejectStory?.(new Error("cancelled"));
+    await firstRun.catch(() => {});
   });
 
   it("getStatus reflects state before and after run", async () => {
@@ -253,7 +263,7 @@ describe("Integration: full plugin lifecycle", () => {
     expect(before.storyId).toBeNull();
     expect(before.iteration).toBe(1);
 
-    await foreman.run("4-1", "/workspace");
+    await foreman.run("4-1");
 
     const after = foreman.getStatus();
     expect(after.storyId).toBe("4-1");
@@ -266,11 +276,25 @@ describe("Integration: full plugin lifecycle", () => {
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
 
-    await foreman.run("5-1", "/workspace");
+    await foreman.run("5-1");
 
     expect(capturedPrompts).toHaveLength(3);
 
     expect(capturedPrompts[0].text).toContain("dev-story");
+    expect(capturedPrompts[0].text).toContain(
+      "/mock/stories/5-1-story.md"
+    );
+
+    expect(capturedPrompts[1].text).toContain("code-review");
+    expect(capturedPrompts[1].text).toContain(
+      "/mock/stories/5-1-story.md"
+    );
+
+    expect(capturedPrompts[2].text).toContain(
+      "Review the story file"
+    );
+    expect(capturedPrompts[2].text).toContain("PASS");
+    expect(capturedPrompts[2].text).toContain("NEEDS_WORK");
   });
 
   it("creates sessions with correct title format", async () => {
@@ -279,7 +303,7 @@ describe("Integration: full plugin lifecycle", () => {
     const foreman = new Foreman(testConfig, client);
     ref.current = foreman;
 
-    await foreman.run("6-2", "/workspace");
+    await foreman.run("6-2");
 
     expect(capturedTitles).toEqual([
       "foreman:developer:6-2:iter1",
