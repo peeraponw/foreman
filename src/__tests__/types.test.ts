@@ -109,14 +109,12 @@ describe("isArbiterVerdict type guard", () => {
 });
 
 describe("RoleConfig type", () => {
-  it("accepts object with provider, model, agent fields", () => {
+  it("accepts object with model and agent fields", () => {
     const config: RoleConfig = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "anthropic/claude-sonnet-4-20250514",
       agent: "sisyphus",
     };
-    expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-20250514");
+    expect(config.model).toBe("anthropic/claude-sonnet-4-20250514");
     expect(config.agent).toBe("sisyphus");
   });
 });
@@ -129,9 +127,9 @@ describe("ForemanConfig type", () => {
       max_iterations: 3,
       contexts: ["docs/epics.md", "docs/architecture.md"],
       roles: {
-        developer: { provider: "anthropic", model: "claude-sonnet-4", agent: "sisyphus" },
-        reviewer: { provider: "anthropic", model: "claude-sonnet-4", agent: "sisyphus" },
-        arbiter: { provider: "anthropic", model: "claude-opus-4", agent: "sisyphus" },
+        developer: { model: "anthropic/claude-sonnet-4", agent: "sisyphus" },
+        reviewer: { model: "anthropic/claude-sonnet-4", agent: "sisyphus" },
+        arbiter: { model: "anthropic/claude-opus-4", agent: "sisyphus" },
       },
       role_timeout_ms: 300000,
     };
@@ -139,7 +137,7 @@ describe("ForemanConfig type", () => {
     expect(config.sprint_status).toBe("docs/sprint-status.yaml");
     expect(config.max_iterations).toBe(3);
     expect(config.contexts).toHaveLength(2);
-    expect(config.roles.developer.provider).toBe("anthropic");
+    expect(config.roles.developer.model).toBe("anthropic/claude-sonnet-4");
     expect(config.role_timeout_ms).toBe(300000);
   });
 });

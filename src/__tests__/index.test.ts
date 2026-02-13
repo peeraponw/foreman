@@ -78,18 +78,15 @@ describe("plugin entry point", () => {
       contexts: [],
       roles: {
         developer: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-20250514",
+          model: "anthropic/claude-sonnet-4-20250514",
           agent: "sisyphus",
         },
         reviewer: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-20250514",
+          model: "anthropic/claude-sonnet-4-20250514",
           agent: "sisyphus",
         },
         arbiter: {
-          provider: "anthropic",
-          model: "claude-opus-4-20250514",
+          model: "anthropic/claude-opus-4-20250514",
           agent: "sisyphus",
         },
       },
