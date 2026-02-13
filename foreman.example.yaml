@@ -1,0 +1,28 @@
+# Foreman OpenCode Plugin configuration
+# User config:    ~/.config/opencode/foreman.yaml
+# Project config: {project}/.opencode/foreman.yaml
+#                 or {project}/.claude/foreman.yaml
+# Project config overrides user config (deep-merged).
+
+stories_dir: docs/stories
+sprint_status: docs/sprint-status.yaml
+max_iterations: 3
+
+# Files the arbiter reads for project context
+contexts:
+  - docs/epics.md
+  - docs/architecture.md
+
+roles:
+  developer:
+    model: anthropic/claude-sonnet-4-20250514
+    agent: sisyphus
+  reviewer:
+    model: anthropic/claude-sonnet-4-20250514
+    agent: sisyphus
+  arbiter:
+    model: anthropic/claude-opus-4-20250514
+    agent: sisyphus
+
+# 30 minutes per role session
+role_timeout_ms: 1800000

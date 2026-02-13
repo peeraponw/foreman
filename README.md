@@ -22,35 +22,36 @@ If installed locally (not from npm), use the path form:
 
 ## Configuration
 
-Create a configuration file at `~/.config/opencode/foreman.json`:
+Copy the example config and edit as needed:
 
-```json
-{
-  "stories_dir": "docs/stories",
-  "sprint_status": "docs/sprint-status.yaml",
-  "max_iterations": 3,
-  "contexts": [
-    "docs/epics.md",
-    "docs/architecture.md"
-  ],
-  "roles": {
-    "developer": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-20250514",
-      "agent": "sisyphus"
-    },
-    "reviewer": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-20250514",
-      "agent": "sisyphus"
-    },
-    "arbiter": {
-      "provider": "anthropic",
-      "model": "claude-opus-4-20250514",
-      "agent": "sisyphus"
-    }
-  }
-}
+```bash
+mkdir -p ~/.config/opencode
+cp foreman.example.yaml ~/.config/opencode/foreman.yaml
+```
+
+Full schema:
+
+```yaml
+stories_dir: docs/stories
+sprint_status: docs/sprint-status.yaml
+max_iterations: 3
+
+contexts:
+  - docs/epics.md
+  - docs/architecture.md
+
+roles:
+  developer:
+    model: anthropic/claude-sonnet-4-20250514
+    agent: sisyphus
+  reviewer:
+    model: anthropic/claude-sonnet-4-20250514
+    agent: sisyphus
+  arbiter:
+    model: anthropic/claude-opus-4-20250514
+    agent: sisyphus
+
+role_timeout_ms: 1800000
 ```
 
 | Field | Description |
@@ -59,11 +60,21 @@ Create a configuration file at `~/.config/opencode/foreman.json`:
 | `sprint_status` | Path to sprint-status.yaml |
 | `max_iterations` | Max dev-review-arbitrate cycles before stopping (default: 3) |
 | `contexts` | Files the arbiter reads for project awareness |
-| `roles.*.provider` | LLM provider ID for each role |
-| `roles.*.model` | LLM model ID for each role |
+| `roles.*.model` | LLM model in `provider/model` format (e.g., `anthropic/claude-sonnet-4-20250514`) |
 | `roles.*.agent` | OpenCode agent name for each role |
+| `role_timeout_ms` | Timeout per role session in ms (default: 1800000 / 30 min) |
 
-If the configuration file is missing, sensible defaults are used.
+### Config Resolution Order
+
+Foreman loads config from multiple locations (later overrides earlier):
+
+1. **Built-in defaults** — sensible values for all fields
+2. **User config** — `~/.config/opencode/foreman.{yaml,yml,json}`
+3. **Project config** — `{project}/.opencode/foreman.*` or `{project}/.claude/foreman.*`
+
+Project-level config is checked in `.opencode/` first, then `.claude/`. Values from project config are deep-merged over user config (nested objects like `roles` merge per-key; arrays and primitives replace entirely).
+
+All relative paths (`stories_dir`, `sprint_status`, `contexts`) are resolved relative to the project directory where OpenCode is started, regardless of which config file defines them.
 
 ## Usage
 
@@ -101,13 +112,37 @@ Returns the current state (Idle, Developing, Reviewing, Arbitrating, Complete, F
 - [BMAD plugin](https://github.com/anomalyco/opencode) providing `/bmad:bmm:dev-story` and `/bmad:bmm:code-review` commands
 - BMAD story files in the configured `stories_dir`
 
+## Verifying It Works
+
+### Smoke test (no BMAD needed)
+
+After adding the plugin to `opencode.json` and starting OpenCode, call `foreman_status`. It should return:
+
+```
+State: Idle | Story: none | Iteration: 1/3
+```
+
+Then try `foreman_run` with any story ID. Without a matching story file it will fail, but the error message confirms the plugin is wired up correctly.
+
+### Full test (requires BMAD)
+
+You need a project with BMAD story files in the configured `stories_dir` and the BMAD plugin installed. Then in OpenCode:
+
+```
+foreman_run { "story_id": "1-3" }
+```
+
+This creates separate LLM sessions for Developer, Reviewer, and Arbiter, looping until PASS or max iterations.
+
+Note: there is no standalone CLI mode. The plugin requires OpenCode's SDK for session creation and event handling.
+
 ## Development
 
 ```bash
 # Install dependencies
 bun install
 
-# Run tests
+# Run tests (123 tests across 8 files)
 bun run test
 
 # Type check
