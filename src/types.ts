@@ -74,9 +74,7 @@ export function isArbiterVerdict(s: string): s is ArbiterVerdict {
  * Configuration for a single role (developer, reviewer, or arbiter).
  */
 export interface RoleConfig {
-  /** LLM provider ID (e.g., "anthropic") */
-  provider: string;
-  /** LLM model ID (e.g., "claude-sonnet-4-20250514") */
+  /** LLM model in "provider/model" format (e.g., "anthropic/claude-sonnet-4-20250514") */
   model: string;
   /** OpenCode agent name (e.g., "sisyphus") */
   agent: string;

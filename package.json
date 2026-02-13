@@ -12,15 +12,17 @@
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun --format esm && bun run node_modules/typescript/bin/tsc --emitDeclarationOnly",
-    "test": "bun test src/__tests__/setup.test.ts src/__tests__/types.test.ts src/__tests__/config.test.ts src/__tests__/story-parser.test.ts src/__tests__/prompts.test.ts src/__tests__/foreman.test.ts src/__tests__/index.test.ts && bun test src/__tests__/integration.test.ts",
+    "test": "bun test ./src/__tests__/setup.test.ts ./src/__tests__/types.test.ts ./src/__tests__/config.test.ts ./src/__tests__/story-parser.test.ts ./src/__tests__/prompts.test.ts ./src/__tests__/foreman.test.ts ./src/__tests__/index.test.ts && bun test ./src/__tests__/integration.test.ts",
     "typecheck": "bun run node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.1.19",
     "@opencode-ai/sdk": "^1.1.19",
+    "js-yaml": "^4.1",
     "zod": "^3.23"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0",
     "bun-types": "latest",
     "typescript": "^5.7"
   }
